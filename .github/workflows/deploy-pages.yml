@@ -14,51 +14,54 @@ concurrency:
   group: "pages"
   cancel-in-progress: true
 
+env:
+  DOTNET_VERSION: "10.0.x"
+  PROJECT_PATH: "MCCTheatreBrowser.csproj"
+
+  BASE_HREF: "/"
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore "${{ env.PROJECT_PATH }}"
 
       - name: Publish
-        run: dotnet publish -c Release -o publish
+        run: dotnet publish "${{ env.PROJECT_PATH }}" -c Release -o publish
 
-      - name: Set base href for GitHub Pages
+      - name: Configure Blazor for GitHub Pages
         shell: bash
         run: |
-          REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          OWNER_NAME="${GITHUB_REPOSITORY%/*}"
-          if [[ "$REPO_NAME" == "${OWNER_NAME}.github.io" ]]; then
-            BASE_HREF="/"
-          else
-            BASE_HREF="/${REPO_NAME}/"
-          fi
+          # 1) Fix base href
           sed -i "s|<base href=\"/\" />|<base href=\"${BASE_HREF}\" />|g" publish/wwwroot/index.html
           echo "Using base href: ${BASE_HREF}"
 
-      - name: Upload Pages Artifact
+          # 2) Stop GitHub Pages (Jekyll) ignoring _framework etc.
+          touch publish/wwwroot/.nojekyll
+
+          # 3) SPA fallback for deep links (copy index.html to 404.html)
+          cp publish/wwwroot/index.html publish/wwwroot/404.html
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: publish/wwwroot
 
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-
     steps:
-      - name: Deploy To GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4
