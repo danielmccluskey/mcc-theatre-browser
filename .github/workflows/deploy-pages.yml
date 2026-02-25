@@ -1,0 +1,64 @@
+name: Deploy To GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Publish
+        run: dotnet publish -c Release -o publish
+
+      - name: Set base href for GitHub Pages
+        shell: bash
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          OWNER_NAME="${GITHUB_REPOSITORY%/*}"
+          if [[ "$REPO_NAME" == "${OWNER_NAME}.github.io" ]]; then
+            BASE_HREF="/"
+          else
+            BASE_HREF="/${REPO_NAME}/"
+          fi
+          sed -i "s|<base href=\"/\" />|<base href=\"${BASE_HREF}\" />|g" publish/wwwroot/index.html
+          echo "Using base href: ${BASE_HREF}"
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish/wwwroot
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy To GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
