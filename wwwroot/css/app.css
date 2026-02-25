@@ -1,0 +1,125 @@
+html,
+body {
+    background: #111;
+    color: #eee;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+a {
+    color: #8ec5ff;
+}
+
+code {
+    color: #ffd1e3;
+}
+
+.card,
+.table,
+.table-responsive,
+.form-control,
+.form-select {
+    background: #1a1a1a;
+    color: #eee;
+}
+
+.table {
+    --bs-table-bg: #1a1a1a;
+    --bs-table-color: #eee;
+    --bs-table-striped-bg: #202020;
+    --bs-table-striped-color: #eee;
+    --bs-table-border-color: #333;
+}
+
+.form-control,
+.form-select {
+    border-color: #444;
+}
+
+/* Blazor error bar */
+#blazor-error-ui {
+    color-scheme: dark;
+    background: #3a1e1e;
+    color: #fff;
+    bottom: 0;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+#blazor-error-ui .reload {
+    color: #fff;
+    font-weight: 600;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.4rem;
+}
+
+/* Blazor wasm startup loader */
+.loading-progress {
+    position: absolute;
+    display: block;
+    width: 8rem;
+    height: 8rem;
+    inset: 20vh 0 auto 0;
+    margin: 0 auto 0 auto;
+}
+
+.loading-progress circle {
+    fill: none;
+    stroke: #444;
+    stroke-width: 0.6rem;
+    transform-origin: 50% 50%;
+    transform: rotate(-90deg);
+}
+
+.loading-progress circle:last-child {
+    stroke: #8ec5ff;
+    stroke-dasharray: calc(3.141 * var(--blazor-load-percentage, 0%) * 0.8), 500%;
+    transition: stroke-dasharray 0.05s ease-in-out;
+}
+
+.loading-progress-text {
+    position: absolute;
+    text-align: center;
+    font-weight: 700;
+    inset: calc(20vh + 3.25rem) 0 auto 0.2rem;
+}
+
+.loading-progress-text:after {
+    content: var(--blazor-load-percentage-text, "Loading");
+}
+
+.tutorial-box {
+    border: 1px solid #3a3a3a;
+    background: #171717;
+    border-radius: 8px;
+    padding: 0.8rem;
+}
+
+.tutorial-image-wrap {
+    display: block;
+    border: 1px solid #4a4a4a;
+    border-radius: 8px;
+    background: #0d0d0d;
+    padding: 0.4rem;
+}
+
+.tutorial-image {
+    width: 100%;
+    max-height: 340px;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.tutorial-caption {
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+    color: #b9b9b9;
+}

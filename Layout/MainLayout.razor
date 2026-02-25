@@ -1,0 +1,23 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <header class="app-header">
+        <div class="app-container d-flex align-items-center justify-content-between">
+            <div class="brand-wrap">
+                <div class="logo-placeholder d-flex align-items-center justify-content-center">
+                    <img src="images/halosquare.webp" alt="MCC Theatre Browser logo" class="logo-image" />
+                </div>
+                <div class="brand-text">MCC Theatre Browser</div>
+            </div>
+            <nav class="d-flex align-items-center gap-3">
+                <NavLink href="" Match="NavLinkMatch.All" class="header-link">Home</NavLink>
+                <NavLink href="about" class="header-link">About</NavLink>
+                <a class="header-link" href="https://github.com/danielmccluskey/mcc-theatre-browser" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="app-container py-4">
+        @Body
+    </main>
+</div>

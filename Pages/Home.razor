@@ -1,0 +1,599 @@
+@page "/"
+@using System.Globalization
+@using System.Text.Json
+@using System.Text.RegularExpressions
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+
+<PageTitle>MCC Theatre Browser</PageTitle>
+
+<p>
+    Pick this folder when the browser asks:
+    <code>@UserFolderPath</code>
+    <button class="btn btn-sm btn-outline-secondary ms-1"
+            @onclick="CopyPath"
+            title="Copy folder path">
+        Copy
+    </button>
+</p>
+
+<details class="mb-3">
+    <summary><strong>Quick tutorial (click to open)</strong></summary>
+    <div class="mt-2 tutorial-box">
+        <p class="mb-2">
+            1. Click <strong>Grant Folder Access</strong>.<br />
+            2. In file picker, paste/select <code>%USERPROFILE%\AppData\LocalLow\MCC\Temporary\UserContent</code>.<br />
+            3. Click <strong>Select Folder</strong>. Then choose a game tab in this app.
+        </p>
+
+        <picture class="tutorial-image-wrap">
+            <source srcset="images/tut1.webp" type="image/webp" />
+            <img src="images/tut1.png"
+                 alt="Tutorial screenshot for picking MCC UserContent folder"
+                 class="img-fluid tutorial-image" />
+        </picture>
+        <div class="tutorial-caption">Example of what to click in the folder picker.</div>
+    </div>
+</details>
+
+<div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+    <button class="btn btn-primary" @onclick="PickFolder">Grant Folder Access</button>
+    <button class="btn btn-outline-secondary" @onclick="RefreshFolders" disabled="@(!_hasFolder || _loading || _zipping || _loadingFolders || _restoringSavedFolder)">Refresh</button>
+    <button class="btn btn-warning btn-sm" @onclick="BackupWholeFolder" disabled="@(!_hasFolder || _loading || _zipping || _loadingFolders || _restoringSavedFolder)">Backup Whole Folder</button>
+    <button class="btn btn-outline-danger btn-sm" @onclick="ClearSavedData">Clear saved data</button>
+    @if (_canTryReconnect)
+    {
+        <button class="btn btn-outline-info btn-sm" @onclick="ReconnectSavedFolder" disabled="@(_restoringSavedFolder || _loadingFolders)">Reconnect saved folder</button>
+    }
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_info))
+{
+    <div class="alert alert-info py-2">@_info</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger py-2">@_error</div>
+}
+
+@if (_loading)
+{
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+        <span>Parsing files... @_done / @_total</span>
+    </div>
+    <div class="progress mb-3" style="height:10px;">
+        <div class="progress-bar progress-bar-striped progress-bar-animated" style="width:@LoadPercent%"></div>
+    </div>
+}
+
+@if (_restoringSavedFolder)
+{
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="spinner-border spinner-border-sm text-info" role="status"></div>
+        <span>Checking last session folder...</span>
+    </div>
+}
+
+@if (_loadingFolders)
+{
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+        <span>Loading folder list...</span>
+    </div>
+}
+
+@if (_zipping)
+{
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+        @if (_zipTotal > 0)
+        {
+            <span>Building zip... @_zipDone / @_zipTotal</span>
+        }
+        else
+        {
+            <span>Building zip...</span>
+        }
+    </div>
+    <div class="progress mb-3" style="height:10px;">
+        <div class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width:@ZipPercent%"></div>
+    </div>
+}
+
+@if (_hasFolder)
+{
+    if (_games.Count == 0)
+    {
+        <p>No game folders found.</p>
+    }
+    else
+    {
+        <ul class="nav nav-tabs mb-3">
+            @for (int i = 0; i < _games.Count; i++)
+            {
+                var tab = i;
+                var g = _games[i];
+                <li class="nav-item">
+                    <button class="nav-link @(tab == _activeGame ? "active" : "")" @onclick="() => SelectGame(tab)">
+                        @g.GameName <span class="ms-1 badge text-bg-secondary">@g.Files.Count</span>
+                    </button>
+                </li>
+            }
+        </ul>
+
+        if (_activeGame >= 0 && _activeGame < _games.Count)
+        {
+            var game = _games[_activeGame];
+            <h5>@game.GameName</h5>
+
+            if (_rowsByGame.TryGetValue(game.GameName, out var rows))
+            {
+                <GameFilesPanel Rows="rows"
+                                IsBusy="@(_zipping || _loading)"
+                                @bind-ShowOnlySelected="_showOnlySelected"
+                                @bind-StripPii="_stripPii"
+                                OnSelectAll="SelectAll"
+                                OnClear="ClearAll"
+                                OnSaveZip="SaveZip" />
+            }
+        }
+    }
+}
+
+@code {
+    private const string UserFolderPath = @"%USERPROFILE%\AppData\LocalLow\MCC\Temporary\UserContent";
+    private const string ExpectedRootFolderName = "UserContent";
+    private static readonly Regex SessionRegex = new("^[A-Za-z]{3}_(\\d{8})_(\\d{6})@", RegexOptions.Compiled);
+    private static readonly HashSet<string> ExpectedGameFolders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Halo2A",
+        "Halo3",
+        "Halo3ODST",
+        "Halo4",
+        "HaloReach"
+    };
+
+    private readonly List<GameFolderRow> _games = [];
+    private readonly Dictionary<string, List<FileRow>> _rowsByGame = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool _hasFolder;
+    private bool _loading;
+    private bool _zipping;
+    private bool _showOnlySelected;
+    private bool _stripPii = true;
+    private int _activeGame = -1;
+
+    private int _total;
+    private int _done;
+    private int _zipTotal;
+    private int _zipDone;
+
+    private string? _info;
+    private string? _error;
+    private bool _canTryReconnect;
+    private bool _triedRestore;
+    private bool _restoringSavedFolder;
+    private bool _loadingFolders;
+
+    private int LoadPercent => _total <= 0 ? 0 : (int)Math.Round((double)_done * 100 / _total);
+    private int ZipPercent => _zipTotal <= 0 ? 0 : (int)Math.Round((double)_zipDone * 100 / _zipTotal);
+
+    private async Task CopyPath()
+    {
+        var copied = await JS.InvokeAsync<bool>("theaterFs.copyText", UserFolderPath);
+        _info = copied ? "Path copied." : "Copy failed.";
+    }
+
+    private async Task BackupWholeFolder()
+    {
+        _error = null;
+        if (!_hasFolder) return;
+
+        _zipping = true;
+        _zipTotal = 0;
+        _zipDone = 0;
+        _info = "Building full backup zip...";
+
+        try
+        {
+            var fileName = $"mcc_usercontent_backup_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+            await JS.InvokeVoidAsync("theaterFs.backupWholeFolderZip", fileName);
+            _info = $"Backup ready: {fileName}";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Backup failed: {ex.Message}";
+        }
+        finally
+        {
+            _zipping = false;
+        }
+    }
+
+    private async Task ClearSavedData()
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm",
+            "Clear saved folder/settings and reload page?");
+        if (!ok) return;
+
+        await JS.InvokeVoidAsync("theaterFs.clearSavedDataAndReload");
+    }
+
+    private async Task PickFolder()
+    {
+        _error = null;
+
+        try
+        {
+            var ok = await JS.InvokeAsync<bool>("theaterFs.isSupported");
+            if (!ok)
+            {
+                _error = "Browser not supported for folder access.";
+                return;
+            }
+
+            // Try saved handle first, only open picker if this fails.
+            var restored = await TryRestoreSavedFolder(autoRequestPermission: true, silentIfMissing: true);
+            if (restored)
+            {
+                return;
+            }
+
+            var result = await JS.InvokeAsync<PickResult>("theaterFs.pickUserContentFolder");
+            if (!IsExpectedFolderName(result.FolderName))
+            {
+                await ResetFolderSelection();
+                _error = $"Wrong folder selected. Please pick '{ExpectedRootFolderName}'.";
+                return;
+            }
+
+            _hasFolder = true;
+            _canTryReconnect = false;
+            await RefreshFoldersInternal(showMessage: false);
+            if (!HasExpectedGameFolder())
+            {
+                await ResetFolderSelection();
+                _error = "That folder does not look like MCC UserContent. Please pick the UserContent folder.";
+                return;
+            }
+
+            _info = $"Access granted: {result.FolderName}";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _triedRestore)
+            return;
+
+        _triedRestore = true;
+        await TryRestoreSavedFolder(autoRequestPermission: true, silentIfMissing: true);
+    }
+
+    private async Task RefreshFolders()
+    {
+        await RefreshFoldersInternal(showMessage: true);
+    }
+
+    private async Task RefreshFoldersInternal(bool showMessage)
+    {
+        _error = null;
+        _loadingFolders = true;
+
+        try
+        {
+            var list = await JS.InvokeAsync<List<GameFolderRow>>("theaterFs.refreshGameFiles");
+            _games.Clear();
+            _games.AddRange(list);
+            _rowsByGame.Clear();
+            _activeGame = -1;
+            _showOnlySelected = false;
+            if (showMessage)
+            {
+                _info = $"Loaded {_games.Count} game folders.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loadingFolders = false;
+        }
+    }
+
+    private async Task ReconnectSavedFolder()
+    {
+        await TryRestoreSavedFolder(autoRequestPermission: true, silentIfMissing: false);
+    }
+
+    private async Task<bool> TryRestoreSavedFolder(bool autoRequestPermission, bool silentIfMissing)
+    {
+        _restoringSavedFolder = true;
+
+        try
+        {
+            var result = await JS.InvokeAsync<RestoreResult>("theaterFs.tryRestoreSavedFolder", autoRequestPermission);
+            if (result.Restored)
+            {
+                if (!IsExpectedFolderName(result.FolderName))
+                {
+                    await ResetFolderSelection();
+                    if (!silentIfMissing)
+                    {
+                        _error = $"Saved folder is not '{ExpectedRootFolderName}'. Please grant access again.";
+                    }
+
+                    return false;
+                }
+
+                _hasFolder = true;
+                _canTryReconnect = false;
+                _error = null;
+                await RefreshFoldersInternal(showMessage: false);
+                if (!HasExpectedGameFolder())
+                {
+                    await ResetFolderSelection();
+                    if (!silentIfMissing)
+                    {
+                        _error = "Saved folder is not MCC UserContent. Please grant access again.";
+                    }
+
+                    return false;
+                }
+
+                _info = $"Loaded from last session: {result.FolderName}";
+                return true;
+            }
+
+            if (result.Reason == "permission-not-granted")
+            {
+                _canTryReconnect = true;
+                if (!silentIfMissing)
+                {
+                    _info = "Saved folder found, permission needed. Click 'Reconnect saved folder'.";
+                }
+                return false;
+            }
+
+            if (!silentIfMissing && result.Reason == "no-saved-handle")
+            {
+                _info = "No saved folder from previous session.";
+            }
+        }
+        catch
+        {
+            // ignore restore problems, manual picker still works
+        }
+        finally
+        {
+            _restoringSavedFolder = false;
+        }
+
+        return false;
+    }
+
+    private async Task SelectGame(int index)
+    {
+        _activeGame = index;
+        if (_activeGame < 0 || _activeGame >= _games.Count)
+            return;
+
+        var game = _games[_activeGame];
+        if (_rowsByGame.ContainsKey(game.GameName))
+            return;
+
+        await ParseGame(game);
+    }
+
+    private async Task ParseGame(GameFolderRow game)
+    {
+        _loading = true;
+        _total = game.Files.Count;
+        _done = 0;
+        _info = $"Parsing {_total} files in {game.GameName}...";
+        StateHasChanged();
+
+        var rows = new List<FileRow>();
+
+        try
+        {
+            foreach (var path in game.Files)
+            {
+                var row = new FileRow
+                {
+                    GameName = game.GameName,
+                    RelativePath = path
+                };
+
+                try
+                {
+                    // only read first part, faster
+                    var file = await JS.InvokeAsync<JsFile>("theaterFs.readFilePrefixBytes", game.GameName, path, 8192);
+                    row.Size = file.Size;
+                    row.LastModified = DateTimeOffset.FromUnixTimeMilliseconds(file.LastModified);
+
+                    if (file.Bytes is null || file.Bytes.Count == 0)
+                    {
+                        row.Error = "No bytes";
+                    }
+                    else
+                    {
+                        var bytes = new byte[file.Bytes.Count];
+                        for (int i = 0; i < file.Bytes.Count; i++) bytes[i] = (byte)file.Bytes[i];
+
+                        var meta = ReachTheaterParser.ParseLight(bytes);
+                        row.Title = meta.Title;
+                        row.SessionName = meta.SessionName;
+                        row.SessionNameSafe = ReachTheaterParser.StripSessionPii(meta.SessionName);
+                        row.SessionTime = ParseSessionTime(meta.SessionName);
+                        row.ScenarioPathOrUgcUrl = meta.ScenarioPathOrUgcUrl;
+                        row.PlayerName = meta.PlayerName;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    row.Error = ex.Message;
+                }
+
+                rows.Add(row);
+                _done++;
+                if (_done % 5 == 0 || _done == _total) StateHasChanged();
+            }
+
+            _rowsByGame[game.GameName] = rows
+                .OrderByDescending(x => x.SessionTime ?? DateTime.MinValue)
+                .ThenBy(x => x.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _info = $"Parsed {rows.Count} files.";
+        }
+        finally
+        {
+            _loading = false;
+            _total = 0;
+            _done = 0;
+        }
+    }
+
+    private void SelectAll()
+    {
+        if (!TryCurrentRows(out var rows)) return;
+        foreach (var row in rows) row.IsSelected = true;
+    }
+
+    private void ClearAll()
+    {
+        if (!TryCurrentRows(out var rows)) return;
+        foreach (var row in rows) row.IsSelected = false;
+    }
+
+    private async Task SaveZip()
+    {
+        _error = null;
+        if (!TryCurrentRows(out var rows)) return;
+
+        var selected = rows.Where(x => x.IsSelected).ToList();
+        if (selected.Count == 0)
+        {
+            _info = "Nothing selected.";
+            return;
+        }
+
+        _zipping = true;
+        _zipTotal = selected.Count;
+        _zipDone = 0;
+        _info = $"Building zip for {_zipTotal} files...";
+        StateHasChanged();
+
+        try
+        {
+            var meta = new ZipMeta
+            {
+                CreatedUtc = DateTimeOffset.UtcNow,
+                StripPii = _stripPii,
+                FileCount = selected.Count
+            };
+
+            foreach (var row in selected)
+            {
+                meta.Files.Add(new ZipMetaItem
+                {
+                    GameName = row.GameName,
+                    RelativePath = row.RelativePath,
+                    Size = row.Size,
+                    SessionName = GetSessionForUi(row),
+                    SessionTime = row.SessionTime,
+                    Title = row.Title,
+                    PlayerName = row.PlayerName,
+                    ScenarioPathOrUgcUrl = row.ScenarioPathOrUgcUrl,
+                    Error = row.Error
+                });
+
+                _zipDone++;
+                if (_zipDone % 5 == 0 || _zipDone == _zipTotal) StateHasChanged();
+            }
+
+            var entries = selected.Select(r => new ZipEntryRequest
+            {
+                GameName = r.GameName,
+                RelativePath = r.RelativePath
+            }).ToList();
+
+            var metaJson = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
+            var gameName = _games[_activeGame].GameName;
+            var fileName = $"mcc_theatre_{gameName}_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+            await JS.InvokeVoidAsync("theaterFs.buildZipAndDownload", fileName, entries, metaJson);
+
+            _info = $"Zip ready: {fileName}";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Zip failed: {ex.Message}";
+        }
+        finally
+        {
+            _zipping = false;
+            _zipTotal = 0;
+            _zipDone = 0;
+        }
+    }
+
+    private bool TryCurrentRows(out List<FileRow> rows)
+    {
+        rows = new List<FileRow>();
+        if (_activeGame < 0 || _activeGame >= _games.Count) return false;
+        var game = _games[_activeGame];
+        if (!_rowsByGame.TryGetValue(game.GameName, out var found)) return false;
+        rows = found;
+        return true;
+    }
+
+    private string GetSessionForUi(FileRow row)
+    {
+        var value = _stripPii ? row.SessionNameSafe : row.SessionName;
+        if (string.IsNullOrWhiteSpace(value)) return "(null)";
+        return value;
+    }
+
+    private static DateTime? ParseSessionTime(string? sessionName)
+    {
+        if (string.IsNullOrWhiteSpace(sessionName)) return null;
+        var m = SessionRegex.Match(sessionName);
+        if (!m.Success) return null;
+
+        var raw = m.Groups[1].Value + m.Groups[2].Value;
+        if (DateTime.TryParseExact(raw, "MMddyyyyHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+            return dt;
+
+        return null;
+    }
+
+    private static bool IsExpectedFolderName(string? folderName)
+    {
+        return string.Equals(folderName, ExpectedRootFolderName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool HasExpectedGameFolder()
+    {
+        return _games.Any(g => ExpectedGameFolders.Contains(g.GameName));
+    }
+
+    private async Task ResetFolderSelection()
+    {
+        _hasFolder = false;
+        _canTryReconnect = false;
+        _games.Clear();
+        _rowsByGame.Clear();
+        _activeGame = -1;
+        await JS.InvokeVoidAsync("theaterFs.clearCurrentFolderSelection");
+    }
+
+}

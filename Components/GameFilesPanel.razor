@@ -1,0 +1,110 @@
+@using MCCTheatreBrowser.Data
+
+@if (Rows is null || Rows.Count == 0)
+{
+    <p>No rows to show.</p>
+}
+else
+{
+    var selectedCount = Rows.Count(x => x.IsSelected);
+    var showing = ShowOnlySelected ? Rows.Where(x => x.IsSelected).ToList() : Rows;
+
+    <div class="mb-2 d-flex flex-wrap align-items-center gap-2">
+        <span><strong>Selected:</strong> @selectedCount / @Rows.Count</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="OnSelectAll">Select All</button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="OnClear">Clear</button>
+
+        <div class="form-check ms-2">
+            <input class="form-check-input" type="checkbox" id="onlySelected" @bind="ShowOnlySelected" />
+            <label class="form-check-label" for="onlySelected">Show only selected</label>
+        </div>
+
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="stripPii" @bind="StripPii" />
+            <label class="form-check-label" for="stripPii">Strip session PII</label>
+        </div>
+
+        <button class="btn btn-sm btn-success" @onclick="OnSaveZip" disabled="@(selectedCount == 0 || IsBusy)">
+            Save selected to zip
+        </button>
+    </div>
+
+    @if (showing.Count == 0)
+    {
+        <p>No rows to show.</p>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-striped table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>Pick</th>
+                        <th>Session</th>
+                        <th>Session Time</th>
+                        <th>Title</th>
+                        <th>Player</th>
+                        <th>Scenario</th>
+                        <th>File</th>
+                        <th>Size</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in showing)
+                    {
+                        <tr>
+                            <td><input type="checkbox" @bind="row.IsSelected" /></td>
+                            <td><code>@GetSession(row)</code></td>
+                            <td>@(row.SessionTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-")</td>
+                            <td>@(row.Title ?? "-")</td>
+                            <td>@(row.PlayerName ?? "-")</td>
+                            <td><code>@(row.ScenarioPathOrUgcUrl ?? "-")</code></td>
+                            <td><code>@row.RelativePath</code></td>
+                            <td>@FormatSize(row.Size)</td>
+                            <td>
+                                @if (string.IsNullOrWhiteSpace(row.Error))
+                                {
+                                    <span class="badge text-bg-success">OK</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-danger" title="@row.Error">Error</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public List<FileRow> Rows { get; set; } = [];
+    [Parameter] public bool IsBusy { get; set; }
+
+    [Parameter] public bool ShowOnlySelected { get; set; }
+    [Parameter] public EventCallback<bool> ShowOnlySelectedChanged { get; set; }
+
+    [Parameter] public bool StripPii { get; set; }
+    [Parameter] public EventCallback<bool> StripPiiChanged { get; set; }
+
+    [Parameter] public EventCallback OnSelectAll { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+    [Parameter] public EventCallback OnSaveZip { get; set; }
+
+    private string GetSession(FileRow row)
+    {
+        var value = StripPii ? row.SessionNameSafe : row.SessionName;
+        if (string.IsNullOrWhiteSpace(value)) return "(null)";
+        return value;
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / 1024.0 / 1024.0:F2} MB";
+    }
+}
